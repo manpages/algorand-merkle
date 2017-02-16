@@ -2,7 +2,7 @@ name:                algorand-merkle
 version:             0.1.0.0
 -- synopsis:
 -- description:
-homepage:            https://github.com/githubuser/algorand-merkle#readme
+homepage:            https://github.com/manpages/algorand-merkle#readme
 license:             BSD3
 license-file:        LICENSE
 author:              Author name here
@@ -38,4 +38,4 @@ test-suite algorand-merkle-test
 
 source-repository head
   type:     git
-  location: https://github.com/githubuser/algorand-merkle
+  location: https://github.com/manpages/algorand-merkle
