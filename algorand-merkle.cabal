@@ -17,7 +17,7 @@ library
   hs-source-dirs:      src
   exposed-modules:     Algorand.Merkle
   build-depends:       base >= 4.7 && < 5
-                     , semigroups
+                     , vector
   default-language:    Haskell2010
 
 executable algorand-merkle-exe
