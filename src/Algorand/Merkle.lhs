@@ -68,7 +68,9 @@ module Algorand.Merkle
   ,HashParams(..)
   ,leaf
   ,merkleTree
-  ,append)
+  ,append
+  ,foldFront
+  ,front)
   where
 \end{code}
 
@@ -152,12 +154,48 @@ merkleTree HashParams{hpHash,hpConcat,hpEmpty} =
     mkLayer (x:y:rest) acc =
         mkLayer rest $ (MerkleTree (hpConcat (mValue x) (mValue y)) x y) : acc
 \end{code}
+
 Now we define a way to append a new data block to the authenticated
-list.
+list. To begin with, we define a helper-function that returns the
+right front of the tree. In case we find $e$ in the right front, we
+pick the left child of the current node, tagging the entry in the
+output list. In our particular implementation, we use $Either$ to tag
+left and right children in a straight-forward way.
 
 \begin{code}
-append :: a -> MerkleTree a b -> MerkleTree a b
-append = undefined
+
+front
+    :: Eq b
+    => HashParams a b
+    -> MerkleTree a b
+    -> [Either (MerkleTree a b) (MerkleTree a b)]
+front h = foldFront h (:) []
+
+append :: Eq b => HashParams a b -> a -> MerkleTree a b -> MerkleTree a b
+append hp d mt0 =
+    f (front hp mt0) $ Insert $ (leaf . h) d
+  where
+    f [] (Insert mt) = mt
+    f [] (Update mt) = f [] (Insert mt) -- Shouldn't happen
+    f [Right root] (Insert mt) =
+        MerkleTree (val root <^> val mt) root mt
+    f [Right _root] (Update mt) = mt
+    f [Left root] mt = f [Right root] mt -- Shouldn't happen
+    f (Right _:xs) (Insert mt) =
+        f xs (Insert $ MerkleTree (val mt <^> e) mt $ leaf e)
+    f (Left x:xs) (Insert mt) =
+        f xs (Update $ MerkleTree (val x <^> val mt) x mt)
+    f (Right _:Right p:xs) (Update mt) =
+        f (Right p:xs) (Update $ MerkleTree (val (l p) <^> val mt) (l p) mt)
+    f (Right _:Left p:xs) (Update mt) =
+        f (Left p:xs) (Update $ MerkleTree (val (l p) <^> val mt) (l p) mt)
+    f (Left _:xs) (Update mt) =
+        f xs (Update $ MerkleTree (val mt <^> e) mt $ leaf e)
+    l = mLeft
+    val = mValue
+    h = hpHash hp
+    (<^>) = hpConcat hp
+    e = hpEmpty hp
 \end{code}
 
 \section{Fundamental Instances}
@@ -202,6 +240,34 @@ Last, but not least, $Show$ instance!
 \begin{code}
 instance Show b => Show (MerkleTree a b) where
     show t = "MerkleTree<" ++ show (toList t) ++ ">"
+\end{code}
+
+\subsection{Helper Functions}
+
+Dirty-dirty.
+
+\begin{code}
+foldFront :: Eq b
+          => HashParams a b
+          -> (Either (MerkleTree a b) (MerkleTree a b) -> c -> c)
+          -> c
+          -> MerkleTree a b
+          -> c
+foldFront HashParams{hpEmpty} f0 acc0 mt0 =
+    g Nothing f0 acc0 mt0
+  where
+    g _ _ acc MerkleEmpty = acc
+    g Nothing f acc mt = g (Just mt) f (f (Right mt) acc) (r mt)
+    g (Just tip) f acc mt
+        | val mt == hpEmpty
+        = g (Just $ l tip) f (f (Left $ l tip) acc) (r $ l tip)
+        | otherwise
+        = g (Just mt) f (f (Right mt) acc) (r mt)
+    l = mLeft
+    r = mRight
+    val = mValue
+
+data Append a = Insert a | Update a
 \end{code}
 
 \printbibliography
