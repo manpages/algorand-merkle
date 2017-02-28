@@ -15,7 +15,8 @@
 \addbibresource{Merkle.bib}
 
 \title{Algorand-Compatible Merkle Tree Implementation}
-\author{Jonn Mostovoy <jonn.mostovoy@iohk.io>}
+\author{Jonn Mostovoy \\
+       \href{mailto:jonn.mostovoy@@iohk.io}{jonn.mostovoy@@iohk.io}}
 \date{February 2017}
 \usepackage{geometry}
   \geometry{
