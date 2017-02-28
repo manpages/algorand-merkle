@@ -15,7 +15,7 @@
 \addbibresource{Merkle.bib}
 
 \title{Algorand-Compatible Merkle Tree Implementation}
-\author{Jonn Mostovoy}
+\author{Jonn Mostovoy <jonn.mostovoy@iohk.io>}
 \date{February 2017}
 \usepackage{geometry}
   \geometry{
@@ -62,29 +62,37 @@ Let's define API for Merkle Tree implementation.
 \begin{code}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Algorand.Merkle
   (MerkleTree(..)
   ,HashParams(..)
+  ,Height(..)
+  ,Index(..)
   ,leaf
   ,merkleTree
   ,append
   ,foldFront
-  ,front)
+  ,front
+  ,find
+  ,cofind
+  ,auditProof)
   where
 \end{code}
 
 \subsection{Imports}
 
 We are using $ foldMap $ as a basis for $ Foldable $ implementation,
-so we need to have Data.Monoid at our disposal.
+so we need to have Data.Monoid at our disposal. The only external
+instrument we're using is $ toList $ to easily authenticate any
+$ Foldable $ structure.
 
 \begin{code}
 import           Data.Monoid ((<>), mempty)
 import           Data.Foldable (toList)
 \end{code}
 
-\section{MerkleTree and API Functions}
+\section{MerkleTree and Important API Functions}
 
 \subsection{Data Type}
 
@@ -94,15 +102,17 @@ behind block type polymorphism is clear. Rationale behind hash type
 polymorphism is that not only no properties of Merkle Tree are bound
 to the precise hash function used, but also sometimes it's worty to
 harden the contents of nodes with information about depth to prevent
-second preimage attack[?]. $HashParams$ is a way to describe how will
-the hashing work with a particular Merkle Tree. It requires user to
-provide information about three fields, in order of declaration:
+second preimage attack[?]. Interestingly, polymorphism in hashing also
+contributes to the ease of testing, both manual and automated. Those
+benefits come at an expense of an extra function argument for the most
+of the functions that work with Merkle trees. Its type is $HashParams$
+and it is a way to configure hashing. It requires user to provide
+information about three fields, in order of declaration:
 \begin{itemize}
     \item $hpHash$ tells how to transform a data block into hash
     \item $hpConcat$ tells how to add together two hashes and hash them
     \item $hpEmpty$ tells how to produce designated string $e$
 \end{itemize}
-
 \begin{code}
 data MerkleTree a b
     = MerkleTree { mValue :: b
@@ -116,6 +126,8 @@ data HashParams a b = HashParams
     , hpConcat :: b -> b -> b
     , hpEmpty :: b
     }
+
+type MT a b = MerkleTree a b
 \end{code}
 It would be great if Haskell type system would allow us to trivially
 express surjectivity constraint, then we could say something along the
@@ -125,22 +137,33 @@ lines of
 data (Surjective a b) => MerkleTree a b
 \end{verbatim}
 But that constraint is impossible to meaningfully express in Haskell,
-leaving it for the domain of dependently typed languages.
+leaving it for the domain of dependently typed languages. Finally, it is
+worth noting a $HashParams$ configuration that is very useful for
+testing.
+\begin{verbatim}
+HashParams id (++) "e"
+\end{verbatim}
+In this configuration hash function is identity, concatenation of
+hashes is list concatenation and empty string is an arbitrary string.
 
 \subsection{API Functions}
 
 First, we define a smart constructor for Merkle Tree that
-authenticates any $Foldable$. To construct list of leaves, we fold
-data blocks, hashing those, keeping track of the amount of those. If
-the length is odd, we add string $ e $.  Constructing the initial list
-of nodes, we enter recursive process of building subsequent layer,
-terminating when the length of nodes we work with is $1$.
+authenticates any $Foldable$. The idea is to build the tree layer by
+layer. To get initial layer, we promote data blocks that are given to
+us as an argument to Merkle leaves. Inductively, given a layer, we
+produce next layer by creating Merkle nodes of previous layer pair by
+pair, adding a node with no children holding designated string $e$, if
+the last node in the previous layer does not have a pair (has an odd
+index). If there is one node left in the previous layer, it is the
+root and it gets returned. If there are zero nodes in a layer, an
+empty tree is returned.
 
 \begin{code}
-leaf :: b -> MerkleTree a b
+leaf :: b -> MT a b
 leaf x = MerkleTree x MerkleEmpty MerkleEmpty
 
-merkleTree :: Foldable f => HashParams a b -> f a -> MerkleTree a b
+merkleTree :: Foldable f => HashParams a b -> f a -> MT a b
 merkleTree HashParams{hpHash,hpConcat,hpEmpty} =
     buildTree . mkLeaves
   where
@@ -154,21 +177,29 @@ merkleTree HashParams{hpHash,hpConcat,hpEmpty} =
     mkLayer (x:y:rest) acc =
         mkLayer rest $ (MerkleTree (hpConcat (mValue x) (mValue y)) x y) : acc
 \end{code}
-
 Now we define a way to append a new data block to the authenticated
 list. To begin with, we define a helper-function that returns the
 right front of the tree. In case we find $e$ in the right front, we
 pick the left child of the current node, tagging the entry in the
 output list. In our particular implementation, we use $Either$ to tag
-left and right children in a straight-forward way.
+left and right children in a straight-forward way. Then we implement
+$append$ function itself. Append function works in two modes — $Insert$ and
+$Update$. When the tree has even amount of nodes in a layer, we keep woking
+in $Insert$ mode, adding new element to the left, when the layer has odd
+amount of nodes, we switch to $Update$, updating the leftmost $e$-node.
+If we are already in $Update$ mode, we know that changes to the previous
+layer impact current layer, so we update a node in current layer appropriately.
+When there is only one element left in the list of values generated by $front$
+function, we return its updated version if we are in $Update$ mode and create
+new root, returning it if we are in $Insert$ mode.
 
 \begin{code}
 
 front
     :: Eq b
     => HashParams a b
-    -> MerkleTree a b
-    -> [Either (MerkleTree a b) (MerkleTree a b)]
+    -> MT a b
+    -> [Either (MT a b) (MT a b)]
 front h = foldFront h (:) []
 
 append :: Eq b => HashParams a b -> a -> MerkleTree a b -> MerkleTree a b
@@ -196,6 +227,19 @@ append hp d mt0 =
     h = hpHash hp
     (<^>) = hpConcat hp
     e = hpEmpty hp
+\end{code}
+Finally, we introduce a function to generate a proof of membership of
+$i^{th}$ element in a tree of height $h$. As you can see from the
+implementation, it's the same as $cofind$, which is a function that
+goes along the path to $i^{th}$ element in a $h$-high tree, remembering
+the siblings of the nodes it passed through.
+
+\begin{code}
+auditProof :: Height
+           -> Index
+           -> MT a b
+           -> Maybe [Either (MT a b) (MT a b)]
+auditProof = cofind
 \end{code}
 
 \section{Fundamental Instances}
@@ -242,16 +286,30 @@ instance Show b => Show (MerkleTree a b) where
     show t = "MerkleTree<" ++ show (toList t) ++ ">"
 \end{code}
 
-\subsection{Helper Functions}
-
-Dirty-dirty.
+\subsection{Helper Functions and Data Types}
+We can characterize helper functions we present as dirty. It is
+obvious to the author that a better generalization exists, but
+for the sake of swiftness of implementation, author presents
+functions $foldFront$ and $path$. $foldFront$, given a function that goes
+from a node marked with $Either$ (which, as reader might remember,
+marks whether or not there is an $e$-node to the right of the leftmost
+filled node or not) and accumulated value of any type $c$ to the new
+value of type $c$ folds the front of a Merkle Tree into a value of type $c$.
+$path$, given the height of a tree and an index of a leaf, traverses the
+tree down to this node, applying a function to memorize the path.
+Function that memorizes the path gets the parent node and a direction
+encoded with $Either () ()$ and returns a tagged Merkle node that will
+be remembered by the output. Author apologizes for the lack of elegance
+in helper functions and hopes to generalize those in a later revision
+of this module. At the end of this listing, data types are provided, purpose
+of which is self-explanatory.
 
 \begin{code}
 foldFront :: Eq b
           => HashParams a b
-          -> (Either (MerkleTree a b) (MerkleTree a b) -> c -> c)
+          -> (Either (MT a b) (MT a b) -> c -> c)
           -> c
-          -> MerkleTree a b
+          -> MT a b
           -> c
 foldFront HashParams{hpEmpty} f0 acc0 mt0 =
     g Nothing f0 acc0 mt0
@@ -267,7 +325,49 @@ foldFront HashParams{hpEmpty} f0 acc0 mt0 =
     r = mRight
     val = mValue
 
+find :: Height
+     -> Index
+     -> MT a b
+     -> Maybe [Either (MT a b) (MT a b)]
+find = path f
+    where
+      f mt (Left ()) = (Left . mLeft) mt
+      f mt (Right ()) = (Right . mRight) mt
+
+cofind :: Height
+       -> Index
+       -> MT a b
+       -> Maybe [Either (MT a b) (MT a b)]
+cofind = path f
+    where
+      f mt (Left ()) = (Right . mRight) mt
+      f mt (Right ()) = (Left . mLeft) mt
+
+path :: (MT a b -> Either () () -> Either (MT a b) (MT a b))
+     -> Height
+     -> Index
+     -> MT a b
+     -> Maybe [Either (MT a b) (MT a b)]
+path mkp height0 target0 =
+    let h = mkHeight height0
+        t = mkIndex target0
+    in f (1, 2 ^ (h - 1), 2 ^ h) t []
+  where
+    f (lf,c,rt) target acc mt
+      | target == lf || target == rt = Just acc
+      | lf <= target && target <= c =
+          f (upd lf c) target (mkp mt (Left ()) : acc) (mLeft mt)
+      | c < target && target <= rt =
+          f (upd c rt) target (mkp mt (Right ()) : acc) (mRight mt)
+      | otherwise = Nothing
+    upd from to =
+        let delta = (to - from) `div` 2
+        in (from, from + delta, to)
+
+
 data Append a = Insert a | Update a
+newtype Height = Height {mkHeight :: Int}
+newtype Index = Index {mkIndex :: Int}
 \end{code}
 
 \printbibliography
