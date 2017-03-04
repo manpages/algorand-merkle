@@ -77,7 +77,8 @@ module Algorand.Merkle
   ,front
   ,find
   ,cofind
-  ,auditProof)
+  ,auditProof
+  ,auditVerify)
   where
 \end{code}
 
@@ -89,8 +90,8 @@ instrument we're using is $ toList $ to easily authenticate any
 $ Foldable $ structure.
 
 \begin{code}
-import           Data.Monoid ((<>), mempty)
 import           Data.Foldable (toList)
+import           Data.Monoid   (mempty, (<>))
 \end{code}
 
 \section{MerkleTree and Important API Functions}
@@ -236,11 +237,17 @@ goes along the path to $i^{th}$ element in a $h$-high tree, remembering
 the siblings of the nodes it passed through.
 
 \begin{code}
-auditProof :: Height
-           -> Index
-           -> MT a b
-           -> Maybe [Either (MT a b) (MT a b)]
+auditProof :: Height -> Index -> MT a b -> Maybe [Either (MT a b) (MT a b)]
 auditProof = cofind
+
+auditVerify
+    :: Eq b
+    => HashParams a b -> b -> MT a b -> [Either (MT a b) (MT a b)] -> Bool
+auditVerify _ root x [] = root == mValue x
+auditVerify hp@HashParams{hpConcat} root x (Left p:ps) =
+    auditVerify hp root (leaf (mValue p `hpConcat` mValue x)) ps
+auditVerify hp@HashParams{hpConcat} root x (Right p:ps) =
+    auditVerify hp root (leaf (mValue x `hpConcat` mValue p)) ps
 \end{code}
 
 \section{Fundamental Instances}
